@@ -1,7 +1,8 @@
 /*
- * Programming Assignment 02: ls utility
- * Version 1.1.0
- * Features: Basic listing and long listing (-l)
+ * Operating Systems Programming Assignment 02
+ * Version 1.2.0
+ * Features: Basic Listing, Long Listing (-l),
+ *           Down-Then-Across Column Display
  */
 
 #include <stdio.h>
@@ -16,9 +17,14 @@
 #include <time.h>
 #include <getopt.h>
 #include <limits.h>
+#include <sys/ioctl.h>
+
+#define DEFAULT_WIDTH 80
+#define COLUMN_SPACING 2
 
 void do_ls(const char *dir);
 void long_listing(const char *dir);
+int get_terminal_width(void);
 
 int main(int argc, char *argv[])
 {
@@ -65,10 +71,34 @@ int main(int argc, char *argv[])
     return 0;
 }
 
+/* Detect terminal width */
+int get_terminal_width(void)
+{
+    struct winsize ws;
+
+    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 &&
+        ws.ws_col > 0)
+    {
+        return ws.ws_col;
+    }
+
+    return DEFAULT_WIDTH;
+}
+
+/* Default listing: down then across columns */
 void do_ls(const char *dir)
 {
     DIR *dp;
     struct dirent *entry;
+    char **names = NULL;
+    size_t count = 0;
+    size_t capacity = 16;
+    size_t max_length = 0;
+    size_t rows;
+    size_t columns;
+    int terminal_width;
+    size_t column_width;
+    char **temporary;
 
     dp = opendir(dir);
 
@@ -78,23 +108,122 @@ void do_ls(const char *dir)
         return;
     }
 
-    errno = 0;
+    names = malloc(capacity * sizeof(char *));
 
-    while ((entry = readdir(dp)) != NULL)
+    if (names == NULL)
     {
-        if (entry->d_name[0] == '.')
-            continue;
-
-        printf("%s\n", entry->d_name);
-        errno = 0;
+        perror("malloc");
+        closedir(dp);
+        return;
     }
 
-    if (errno != 0)
-        perror("readdir");
+    /* Collect filenames into a dynamic array */
+    while ((entry = readdir(dp)) != NULL)
+    {
+        const char *name = entry->d_name;
+        size_t length;
+
+        if (name[0] == '.')
+            continue;
+
+        length = strlen(name);
+
+        if (count == capacity)
+        {
+            size_t new_capacity = capacity * 2;
+
+            temporary = realloc(names,
+                                new_capacity * sizeof(char *));
+
+            if (temporary == NULL)
+            {
+                perror("realloc");
+
+                for (size_t i = 0; i < count; i++)
+                    free(names[i]);
+
+                free(names);
+                closedir(dp);
+                return;
+            }
+
+            names = temporary;
+            capacity = new_capacity;
+        }
+
+        names[count] = malloc(length + 1);
+
+        if (names[count] == NULL)
+        {
+            perror("malloc");
+
+            for (size_t i = 0; i < count; i++)
+                free(names[i]);
+
+            free(names);
+            closedir(dp);
+            return;
+        }
+
+        strcpy(names[count], name);
+
+        if (length > max_length)
+            max_length = length;
+
+        count++;
+    }
 
     closedir(dp);
+
+    if (count == 0)
+    {
+        free(names);
+        return;
+    }
+
+    /* Determine the number of columns and rows */
+    terminal_width = get_terminal_width();
+    column_width = max_length + COLUMN_SPACING;
+
+    columns = (size_t)terminal_width / column_width;
+
+    if (columns < 1)
+        columns = 1;
+
+    if (columns > count)
+        columns = count;
+
+    rows = (count + columns - 1) / columns;
+
+    /*
+     * Print down then across:
+     * names[0], names[rows], names[2 * rows], ...
+     */
+    for (size_t row = 0; row < rows; row++)
+    {
+        for (size_t col = 0; col < columns; col++)
+        {
+            size_t index = col * rows + row;
+
+            if (index < count)
+            {
+                printf("%-*s",
+                       (int)(column_width),
+                       names[index]);
+            }
+        }
+
+        putchar('\n');
+    }
+
+    /* Release allocated memory */
+    for (size_t i = 0; i < count; i++)
+        free(names[i]);
+
+    free(names);
 }
 
+/* Long listing */
 void long_listing(const char *dir)
 {
     DIR *dp;
