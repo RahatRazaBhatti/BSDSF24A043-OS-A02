@@ -1,7 +1,11 @@
 /*
  * Operating Systems Programming Assignment 02
- * Features: Basic Listing, Long Listing (-l),
- * Column Display, Horizontal Display (-x)
+ * Features:
+ * 1. Basic Listing
+ * 2. Long Listing (-l)
+ * 3. Column Display (default)
+ * 4. Horizontal Display (-x)
+ * 5. Alphabetical Sorting (A-Z)
  */
 
 #include <stdio.h>
@@ -9,7 +13,6 @@
 #include <unistd.h>
 #include <dirent.h>
 #include <string.h>
-#include <errno.h>
 #include <sys/stat.h>
 #include <pwd.h>
 #include <grp.h>
@@ -24,6 +27,7 @@
 void do_ls(const char *dir, int horizontal);
 void long_listing(const char *dir);
 int get_terminal_width(void);
+int compare_names(const void *a, const void *b);
 
 int main(int argc, char *argv[])
 {
@@ -38,9 +42,11 @@ int main(int argc, char *argv[])
             case 'l':
                 long_format = 1;
                 break;
+
             case 'x':
                 horizontal = 1;
                 break;
+
             default:
                 fprintf(stderr, "Usage: %s [-l] [-x] [directory ...]\n",
                         argv[0]);
@@ -66,35 +72,53 @@ int main(int argc, char *argv[])
             else
                 do_ls(argv[i], horizontal);
 
-            puts("");
+            putchar('\n');
         }
     }
 
     return 0;
 }
 
+/* Compare two filenames alphabetically */
+int compare_names(const void *a, const void *b)
+{
+    const char *name_a = *(const char **)a;
+    const char *name_b = *(const char **)b;
+
+    return strcmp(name_a, name_b);
+}
+
+/* Get terminal width */
 int get_terminal_width(void)
 {
     struct winsize ws;
 
     if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 &&
         ws.ws_col > 0)
+    {
         return ws.ws_col;
+    }
 
     return DEFAULT_WIDTH;
 }
 
+/* List directory contents */
 void do_ls(const char *dir, int horizontal)
 {
     DIR *dp;
     struct dirent *entry;
     char **names;
-    size_t count = 0, capacity = 16, max_length = 0;
-    size_t rows, columns, column_width;
+    size_t count = 0;
+    size_t capacity = 16;
+    size_t max_length = 0;
+    size_t rows;
+    size_t columns;
+    size_t column_width;
     int terminal_width;
     char **temp;
 
     dp = opendir(dir);
+
     if (dp == NULL)
     {
         perror(dir);
@@ -102,6 +126,7 @@ void do_ls(const char *dir, int horizontal)
     }
 
     names = malloc(capacity * sizeof(char *));
+
     if (names == NULL)
     {
         perror("malloc");
@@ -109,44 +134,58 @@ void do_ls(const char *dir, int horizontal)
         return;
     }
 
+    /* Read filenames into a dynamic array */
     while ((entry = readdir(dp)) != NULL)
     {
         size_t length;
+
+        /* Skip hidden files */
         if (entry->d_name[0] == '.')
             continue;
 
         length = strlen(entry->d_name);
 
+        /* Increase array capacity when required */
         if (count == capacity)
         {
             capacity *= 2;
+
             temp = realloc(names, capacity * sizeof(char *));
+
             if (temp == NULL)
             {
                 perror("realloc");
+
                 for (size_t i = 0; i < count; i++)
                     free(names[i]);
+
                 free(names);
                 closedir(dp);
                 return;
             }
+
             names = temp;
         }
 
         names[count] = malloc(length + 1);
+
         if (names[count] == NULL)
         {
             perror("malloc");
+
             for (size_t i = 0; i < count; i++)
                 free(names[i]);
+
             free(names);
             closedir(dp);
             return;
         }
 
         strcpy(names[count], entry->d_name);
+
         if (length > max_length)
             max_length = length;
+
         count++;
     }
 
@@ -158,15 +197,21 @@ void do_ls(const char *dir, int horizontal)
         return;
     }
 
+    /* Sort filenames alphabetically */
+    qsort(names, count, sizeof(char *), compare_names);
+
     terminal_width = get_terminal_width();
     column_width = max_length + COLUMN_SPACING;
+
     columns = (size_t)terminal_width / column_width;
 
     if (columns < 1)
         columns = 1;
+
     if (columns > count)
         columns = count;
 
+    /* Horizontal display: left to right */
     if (horizontal)
     {
         size_t current_width = 0;
@@ -176,7 +221,8 @@ void do_ls(const char *dir, int horizontal)
             size_t length = strlen(names[i]);
 
             if (current_width > 0 &&
-                current_width + column_width > (size_t)terminal_width)
+                current_width + COLUMN_SPACING + length >
+                (size_t)terminal_width)
             {
                 putchar('\n');
                 current_width = 0;
@@ -191,10 +237,12 @@ void do_ls(const char *dir, int horizontal)
                 current_width += COLUMN_SPACING;
             }
         }
+
         putchar('\n');
     }
     else
     {
+        /* Default display: down then across */
         rows = (count + columns - 1) / columns;
 
         for (size_t row = 0; row < rows; row++)
@@ -202,18 +250,27 @@ void do_ls(const char *dir, int horizontal)
             for (size_t col = 0; col < columns; col++)
             {
                 size_t index = col * rows + row;
+
                 if (index < count)
-                    printf("%-*s", (int)column_width, names[index]);
+                {
+                    printf("%-*s",
+                           (int)column_width,
+                           names[index]);
+                }
             }
+
             putchar('\n');
         }
     }
 
+    /* Free allocated memory */
     for (size_t i = 0; i < count; i++)
         free(names[i]);
+
     free(names);
 }
 
+/* Display detailed file information */
 void long_listing(const char *dir)
 {
     DIR *dp;
@@ -222,6 +279,7 @@ void long_listing(const char *dir)
     char path[PATH_MAX];
 
     dp = opendir(dir);
+
     if (dp == NULL)
     {
         perror(dir);
@@ -235,13 +293,15 @@ void long_listing(const char *dir)
         struct tm *time_info;
         char time_string[64];
         char permissions[11];
+
         const char *name = entry->d_name;
 
+        /* Skip hidden files */
         if (name[0] == '.')
             continue;
 
         if (snprintf(path, sizeof(path), "%s/%s", dir, name)
-                >= (int)sizeof(path))
+            >= (int)sizeof(path))
         {
             fprintf(stderr, "Path too long: %s/%s\n", dir, name);
             continue;
@@ -253,6 +313,7 @@ void long_listing(const char *dir)
             continue;
         }
 
+        /* File type */
         if (S_ISDIR(file_stat.st_mode))
             permissions[0] = 'd';
         else if (S_ISLNK(file_stat.st_mode))
@@ -268,15 +329,21 @@ void long_listing(const char *dir)
         else
             permissions[0] = '-';
 
+        /* Owner permissions */
         permissions[1] = (file_stat.st_mode & S_IRUSR) ? 'r' : '-';
         permissions[2] = (file_stat.st_mode & S_IWUSR) ? 'w' : '-';
         permissions[3] = (file_stat.st_mode & S_IXUSR) ? 'x' : '-';
+
+        /* Group permissions */
         permissions[4] = (file_stat.st_mode & S_IRGRP) ? 'r' : '-';
         permissions[5] = (file_stat.st_mode & S_IWGRP) ? 'w' : '-';
         permissions[6] = (file_stat.st_mode & S_IXGRP) ? 'x' : '-';
+
+        /* Other users' permissions */
         permissions[7] = (file_stat.st_mode & S_IROTH) ? 'r' : '-';
         permissions[8] = (file_stat.st_mode & S_IWOTH) ? 'w' : '-';
         permissions[9] = (file_stat.st_mode & S_IXOTH) ? 'x' : '-';
+
         permissions[10] = '\0';
 
         owner = getpwuid(file_stat.st_uid);
@@ -284,10 +351,14 @@ void long_listing(const char *dir)
         time_info = localtime(&file_stat.st_mtime);
 
         if (time_info != NULL)
+        {
             strftime(time_string, sizeof(time_string),
                      "%b %d %H:%M", time_info);
+        }
         else
+        {
             strcpy(time_string, "Unknown time");
+        }
 
         printf("%s %3lu %-8s %-8s %8ld %s %s\n",
                permissions,
