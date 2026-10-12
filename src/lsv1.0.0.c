@@ -7,6 +7,7 @@
  * 4. Horizontal Display (-x)
  * 5. Alphabetical Sorting
  * 6. Colorized Output
+ * 7. Recursive Listing (-R)
  */
 
 #include <stdio.h>
@@ -25,13 +26,14 @@
 #define DEFAULT_WIDTH 80
 #define COLUMN_SPACING 2
 
-#define COLOR_RESET   "\033[0m"
-#define COLOR_BLUE    "\033[1;34m"
-#define COLOR_GREEN   "\033[1;32m"
-#define COLOR_CYAN    "\033[1;36m"
+#define COLOR_RESET "\033[0m"
+#define COLOR_BLUE  "\033[1;34m"
+#define COLOR_GREEN "\033[1;32m"
+#define COLOR_CYAN  "\033[1;36m"
 
 void do_ls(const char *dir, int horizontal);
 void long_listing(const char *dir);
+void recursive_ls(const char *dir, int long_format, int horizontal);
 int get_terminal_width(void);
 int compare_names(const void *a, const void *b);
 const char *get_file_color(const char *path, const char *name);
@@ -41,8 +43,9 @@ int main(int argc, char *argv[])
     int option;
     int long_format = 0;
     int horizontal = 0;
+    int recursive = 0;
 
-    while ((option = getopt(argc, argv, "lx")) != -1)
+    while ((option = getopt(argc, argv, "lxR")) != -1)
     {
         switch (option)
         {
@@ -54,8 +57,13 @@ int main(int argc, char *argv[])
                 horizontal = 1;
                 break;
 
+            case 'R':
+                recursive = 1;
+                break;
+
             default:
-                fprintf(stderr, "Usage: %s [-l] [-x] [directory ...]\n",
+                fprintf(stderr,
+                        "Usage: %s [-l] [-x] [-R] [directory ...]\n",
                         argv[0]);
                 return 1;
         }
@@ -63,7 +71,9 @@ int main(int argc, char *argv[])
 
     if (optind == argc)
     {
-        if (long_format)
+        if (recursive)
+            recursive_ls(".", long_format, horizontal);
+        else if (long_format)
             long_listing(".");
         else
             do_ls(".", horizontal);
@@ -72,12 +82,17 @@ int main(int argc, char *argv[])
     {
         for (int i = optind; i < argc; i++)
         {
-            printf("Directory listing of %s:\n", argv[i]);
-
-            if (long_format)
-                long_listing(argv[i]);
+            if (recursive)
+                recursive_ls(argv[i], long_format, horizontal);
             else
-                do_ls(argv[i], horizontal);
+            {
+                printf("Directory listing of %s:\n", argv[i]);
+
+                if (long_format)
+                    long_listing(argv[i]);
+                else
+                    do_ls(argv[i], horizontal);
+            }
 
             putchar('\n');
         }
@@ -95,31 +110,6 @@ int compare_names(const void *a, const void *b)
     return strcmp(name_a, name_b);
 }
 
-/* Return color according to file type */
-const char *get_file_color(const char *path, const char *name)
-{
-    struct stat file_stat;
-    char full_path[PATH_MAX];
-
-    if (snprintf(full_path, sizeof(full_path), "%s/%s", path, name)
-        >= (int)sizeof(full_path))
-        return COLOR_RESET;
-
-    if (lstat(full_path, &file_stat) == -1)
-        return COLOR_RESET;
-
-    if (S_ISLNK(file_stat.st_mode))
-        return COLOR_CYAN;
-
-    if (S_ISDIR(file_stat.st_mode))
-        return COLOR_BLUE;
-
-    if (file_stat.st_mode & (S_IXUSR | S_IXGRP | S_IXOTH))
-        return COLOR_GREEN;
-
-    return COLOR_RESET;
-}
-
 /* Get terminal width */
 int get_terminal_width(void)
 {
@@ -132,18 +122,39 @@ int get_terminal_width(void)
     return DEFAULT_WIDTH;
 }
 
-/* Display directory contents */
+/* Get color according to file type */
+const char *get_file_color(const char *path, const char *name)
+{
+    struct stat st;
+    char full_path[PATH_MAX];
+
+    if (snprintf(full_path, sizeof(full_path), "%s/%s", path, name)
+        >= (int)sizeof(full_path))
+        return COLOR_RESET;
+
+    if (lstat(full_path, &st) == -1)
+        return COLOR_RESET;
+
+    if (S_ISLNK(st.st_mode))
+        return COLOR_CYAN;
+
+    if (S_ISDIR(st.st_mode))
+        return COLOR_BLUE;
+
+    if (st.st_mode & (S_IXUSR | S_IXGRP | S_IXOTH))
+        return COLOR_GREEN;
+
+    return COLOR_RESET;
+}
+
+/* Display directory contents in columns or horizontally */
 void do_ls(const char *dir, int horizontal)
 {
     DIR *dp;
     struct dirent *entry;
     char **names;
-    size_t count = 0;
-    size_t capacity = 16;
-    size_t max_length = 0;
-    size_t rows;
-    size_t columns;
-    size_t column_width;
+    size_t count = 0, capacity = 16, max_length = 0;
+    size_t rows, columns, column_width;
     int terminal_width;
     char **temp;
 
@@ -164,12 +175,10 @@ void do_ls(const char *dir, int horizontal)
         return;
     }
 
-    /* Read filenames into a dynamic array */
     while ((entry = readdir(dp)) != NULL)
     {
         size_t length;
 
-        /* Skip hidden files */
         if (entry->d_name[0] == '.')
             continue;
 
@@ -225,7 +234,6 @@ void do_ls(const char *dir, int horizontal)
         return;
     }
 
-    /* Sort filenames alphabetically */
     qsort(names, count, sizeof(char *), compare_names);
 
     terminal_width = get_terminal_width();
@@ -239,7 +247,6 @@ void do_ls(const char *dir, int horizontal)
     if (columns > count)
         columns = count;
 
-    /* Horizontal display: left to right */
     if (horizontal)
     {
         size_t current_width = 0;
@@ -271,7 +278,6 @@ void do_ls(const char *dir, int horizontal)
     }
     else
     {
-        /* Default display: down then across */
         rows = (count + columns - 1) / columns;
 
         for (size_t row = 0; row < rows; row++)
@@ -303,12 +309,12 @@ void do_ls(const char *dir, int horizontal)
     free(names);
 }
 
-/* Display detailed file information */
+/* Display long listing */
 void long_listing(const char *dir)
 {
     DIR *dp;
     struct dirent *entry;
-    struct stat file_stat;
+    struct stat st;
     char path[PATH_MAX];
 
     dp = opendir(dir);
@@ -338,44 +344,43 @@ void long_listing(const char *dir)
             continue;
         }
 
-        if (lstat(path, &file_stat) == -1)
+        if (lstat(path, &st) == -1)
         {
             perror(path);
             continue;
         }
 
-        if (S_ISDIR(file_stat.st_mode))
+        if (S_ISDIR(st.st_mode))
             permissions[0] = 'd';
-        else if (S_ISLNK(file_stat.st_mode))
+        else if (S_ISLNK(st.st_mode))
             permissions[0] = 'l';
-        else if (S_ISCHR(file_stat.st_mode))
+        else if (S_ISCHR(st.st_mode))
             permissions[0] = 'c';
-        else if (S_ISBLK(file_stat.st_mode))
+        else if (S_ISBLK(st.st_mode))
             permissions[0] = 'b';
-        else if (S_ISFIFO(file_stat.st_mode))
+        else if (S_ISFIFO(st.st_mode))
             permissions[0] = 'p';
-        else if (S_ISSOCK(file_stat.st_mode))
+        else if (S_ISSOCK(st.st_mode))
             permissions[0] = 's';
         else
             permissions[0] = '-';
 
-        permissions[1] = (file_stat.st_mode & S_IRUSR) ? 'r' : '-';
-        permissions[2] = (file_stat.st_mode & S_IWUSR) ? 'w' : '-';
-        permissions[3] = (file_stat.st_mode & S_IXUSR) ? 'x' : '-';
+        permissions[1] = (st.st_mode & S_IRUSR) ? 'r' : '-';
+        permissions[2] = (st.st_mode & S_IWUSR) ? 'w' : '-';
+        permissions[3] = (st.st_mode & S_IXUSR) ? 'x' : '-';
 
-        permissions[4] = (file_stat.st_mode & S_IRGRP) ? 'r' : '-';
-        permissions[5] = (file_stat.st_mode & S_IWGRP) ? 'w' : '-';
-        permissions[6] = (file_stat.st_mode & S_IXGRP) ? 'x' : '-';
+        permissions[4] = (st.st_mode & S_IRGRP) ? 'r' : '-';
+        permissions[5] = (st.st_mode & S_IWGRP) ? 'w' : '-';
+        permissions[6] = (st.st_mode & S_IXGRP) ? 'x' : '-';
 
-        permissions[7] = (file_stat.st_mode & S_IROTH) ? 'r' : '-';
-        permissions[8] = (file_stat.st_mode & S_IWOTH) ? 'w' : '-';
-        permissions[9] = (file_stat.st_mode & S_IXOTH) ? 'x' : '-';
-
+        permissions[7] = (st.st_mode & S_IROTH) ? 'r' : '-';
+        permissions[8] = (st.st_mode & S_IWOTH) ? 'w' : '-';
+        permissions[9] = (st.st_mode & S_IXOTH) ? 'x' : '-';
         permissions[10] = '\0';
 
-        owner = getpwuid(file_stat.st_uid);
-        group = getgrgid(file_stat.st_gid);
-        time_info = localtime(&file_stat.st_mtime);
+        owner = getpwuid(st.st_uid);
+        group = getgrgid(st.st_gid);
+        time_info = localtime(&st.st_mtime);
 
         if (time_info != NULL)
             strftime(time_string, sizeof(time_string),
@@ -385,23 +390,74 @@ void long_listing(const char *dir)
 
         const char *color = COLOR_RESET;
 
-        if (S_ISDIR(file_stat.st_mode))
+        if (S_ISDIR(st.st_mode))
             color = COLOR_BLUE;
-        else if (S_ISLNK(file_stat.st_mode))
+        else if (S_ISLNK(st.st_mode))
             color = COLOR_CYAN;
-        else if (file_stat.st_mode & (S_IXUSR | S_IXGRP | S_IXOTH))
+        else if (st.st_mode & (S_IXUSR | S_IXGRP | S_IXOTH))
             color = COLOR_GREEN;
 
         printf("%s %3lu %-8s %-8s %8ld %s %s%s%s\n",
                permissions,
-               (unsigned long)file_stat.st_nlink,
+               (unsigned long)st.st_nlink,
                owner ? owner->pw_name : "unknown",
                group ? group->gr_name : "unknown",
-               (long)file_stat.st_size,
+               (long)st.st_size,
                time_string,
-               color,
-               name,
-               COLOR_RESET);
+               color, name, COLOR_RESET);
+    }
+
+    closedir(dp);
+}
+
+/* Recursively list a directory and its subdirectories */
+void recursive_ls(const char *dir, int long_format, int horizontal)
+{
+    DIR *dp;
+    struct dirent *entry;
+    struct stat st;
+    char path[PATH_MAX];
+
+    printf("%s:\n", dir);
+
+    if (long_format)
+        long_listing(dir);
+    else
+        do_ls(dir, horizontal);
+
+    putchar('\n');
+
+    dp = opendir(dir);
+
+    if (dp == NULL)
+    {
+        perror(dir);
+        return;
+    }
+
+    while ((entry = readdir(dp)) != NULL)
+    {
+        /* Skip hidden entries and avoid . and .. loops */
+        if (entry->d_name[0] == '.')
+            continue;
+
+        if (snprintf(path, sizeof(path), "%s/%s", dir, entry->d_name)
+            >= (int)sizeof(path))
+        {
+            fprintf(stderr, "Path too long: %s/%s\n",
+                    dir, entry->d_name);
+            continue;
+        }
+
+        if (lstat(path, &st) == -1)
+        {
+            perror(path);
+            continue;
+        }
+
+        /* Recurse only into real directories, not symbolic links */
+        if (S_ISDIR(st.st_mode))
+            recursive_ls(path, long_format, horizontal);
     }
 
     closedir(dp);
